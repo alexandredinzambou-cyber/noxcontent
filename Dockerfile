@@ -1,15 +1,18 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.19
-FROM ${BUILD_FROM}
-
-RUN apk add --no-cache nodejs npm
+# Image de déploiement Railway — API HTTP FrenchStream uniquement.
+# (Le Dockerfile racine est l'image addon Home-Assistant avec overlay s6 :
+#  inutilisable ici car son entrypoint relance index.js, pas l'API.)
+FROM node:20-alpine
 
 WORKDIR /app
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-COPY index.js ./
 COPY api-server.js ./
 COPY lib/ ./lib/
 COPY public/ ./public/
-COPY rootfs /
+
+ENV PORT=7001
+EXPOSE 7001
+
+CMD ["node", "api-server.js"]
