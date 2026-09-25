@@ -371,28 +371,34 @@ app.get('/cache/stats', (req, res) => {
     res.json(cache.stats());
 });
 
-// Start server
-resolveBaseUrl().then(() => {
-    app.listen(PORT, () => {
-        console.log(`FrenchStream API running at http://localhost:${PORT}`);
-        console.log(`Using FS base URL: ${getBaseUrl()}`);
-        console.log(`TMDB API Key: ${TMDB_API_KEY ? 'configured' : 'NOT SET (title param required)'}`);
-        console.log('');
-        console.log('Available endpoints:');
-        console.log('  GET  /health                 - Health check');
-        console.log('  POST /init                   - Initialize (resolve base URL)');
-        console.log('  GET  /search?q=<query>&type=<movie|series>  - Search');
-        console.log('  GET  /catalog?type=movie&id=films&skip=0    - Catalog');
-        console.log('  GET  /movie/:id/streams      - Movie streams');
-        console.log('  GET  /series/:id/streams?season=1&episode=1 - Series streams');
-        console.log('  GET  /tmdb/:type/:tmdbId/streams?season=1&episode=1&title=... - Streams by TMDB ID');
-        console.log('  GET  /meta?url=<pageUrl>     - Metadata');
-        console.log('  POST /resolve                - Resolve embed URL (body: {url, player})');
-        console.log('  GET  /players                - List available players');
-        console.log('  POST /cache/clear            - Clear cache');
-        console.log('  GET  /cache/stats            - Cache statistics');
-    });
-}).catch(err => {
-    console.error('Failed to resolve base URL:', err);
-    process.exit(1);
+// Start server — bind TOUJOURS immédiatement (Railway coupe un conteneur qui
+// ne répond pas au healthcheck). La résolution du domaine FS (landing →
+// passerelle → miroir, potentiellement lente ou bloquée depuis un datacenter)
+// tourne en arrière-plan ; le fallback fsXX.lol reste utilisé en attendant.
+const fsResolveChain = resolveBaseUrl().catch(err => {
+    console.error('[FS] Resolution failed at startup (fallback kept):', err.message);
+});
+
+app.listen(PORT, () => {
+    console.log(`FrenchStream API running at http://localhost:${PORT}`);
+    console.log(`TMDB API Key: ${TMDB_API_KEY ? 'configured' : 'NOT SET (title param required)'}`);
+    console.log('');
+    console.log('Available endpoints:');
+    console.log('  GET  /health                 - Health check');
+    console.log('  POST /init                   - Initialize (resolve base URL)');
+    console.log('  GET  /search?q=<query>&type=<movie|series>  - Search');
+    console.log('  GET  /catalog?type=movie&id=films&skip=0    - Catalog');
+    console.log('  GET  /movie/:id/streams      - Movie streams');
+    console.log('  GET  /series/:id/streams?season=1&episode=1 - Series streams');
+    console.log('  GET  /tmdb/:type/:tmdbId/streams?season=1&episode=1&title=... - Streams by TMDB ID');
+    console.log('  GET  /meta?url=<pageUrl>     - Metadata');
+    console.log('  POST /resolve                - Resolve embed URL (body: {url, player})');
+    console.log('  GET  /players                - List available players');
+    console.log('  POST /cache/clear            - Clear cache');
+    console.log('  GET  /cache/stats            - Cache statistics');
+});
+
+// Log la résolution FS dès qu'elle aboutit (sans bloquer l'écoute).
+fsResolveChain.then(() => {
+    console.log(`[FS] Base URL after startup: ${getBaseUrl()}`);
 });
