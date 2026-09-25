@@ -9,5 +9,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 COPY index.js ./
+COPY api-server.js ./
 COPY lib/ ./lib/
+COPY public/ ./public/
 COPY rootfs /
