@@ -5,6 +5,29 @@ const cors = require('cors');
 const { searchFS, scrapeFilmPage, scrapeSeriesPage, scrapeCatalog, findBestMatch, scrapeMetadata, scrapeTmdbId } = require('./lib/scraper');
 const { resolve } = require('./lib/resolvers');
 const { resolveBaseUrl, getBaseUrl, HEADERS } = require('./lib/utils');
+
+/* Retrouve l'URL réelle d'une page FS depuis son ID numérique (comme l'addon :
+   /films/ID-*.html ou /s-tv/ID-*.html, en suivant la redirection du site).
+   Cache mémoire 2 h — évite de re-sonder à chaque appel. */
+const fsPageUrlCache = new Map();
+async function findFsPageUrl(fsId, type) {
+    const key = `${type}:${fsId}`;
+    if (fsPageUrlCache.has(key)) return fsPageUrlCache.get(key);
+    const base = await resolveBaseUrl();
+    const prefixes = type === 'movie'
+        ? [`/films/${fsId}-`, `/${fsId}-`]
+        : [`/s-tv/${fsId}-`, `/${fsId}-`];
+    for (const prefix of prefixes) {
+        try {
+            const resp = await fetch(`${base}${prefix}.html`, { headers: HEADERS, redirect: 'follow' });
+            if (resp.ok) {
+                fsPageUrlCache.set(key, resp.url);
+                return resp.url;
+            }
+        } catch {}
+    }
+    return null;
+}
 const cache = require('./lib/cache');
 
 const app = express();
@@ -174,26 +197,27 @@ app.get('/catalog', async (req, res) => {
     }
 });
 
-// Get movie streams
+// Get movie streams — id = ID numérique FS ou URL de page FS complète (?pageUrl=)
 app.get('/movie/:id/streams', async (req, res) => {
     try {
         const { id } = req.params;
         const { pageUrl: customPageUrl } = req.query;
         await resolveBaseUrl();
-        
-        // Use custom pageUrl if provided, otherwise try to construct from ID
-        const pageUrl = customPageUrl || `${getBaseUrl()}/films/${id}.html`;
+
+        // Retrouve la vraie page (avec slug) depuis l'ID — /films/ID.html seul est invalide.
+        const pageUrl = customPageUrl || await findFsPageUrl(id, 'movie');
+        if (!pageUrl) return res.status(404).json({ error: `Page FS introuvable pour l'ID ${id}` });
         const rawStreams = await scrapeFilmPage(pageUrl);
         const streams = await formatStreams(rawStreams, pageUrl, null, null);
-        
-        const meta = await scrapeMetadata(pageUrl);
-        
-        res.json({ 
-            id, 
-            pageUrl, 
+
+        const meta = await scrapeMetadata(pageUrl).catch(() => ({}));
+
+        res.json({
+            id,
+            pageUrl,
             meta,
-            count: streams.length, 
-            streams 
+            count: streams.length,
+            streams
         });
     } catch (err) {
         console.error('[API] Movie streams error:', err.message);
@@ -201,33 +225,34 @@ app.get('/movie/:id/streams', async (req, res) => {
     }
 });
 
-// Get series streams (season/episode)
+// Get series streams (season/episode) — id = ID numérique FS ou ?pageUrl=
 app.get('/series/:id/streams', async (req, res) => {
     try {
         const { id } = req.params;
         const { season, episode, pageUrl: customPageUrl } = req.query;
-        
+
         if (!season || !episode) {
             return res.status(400).json({ error: 'season and episode query parameters are required' });
         }
-        
+
         await resolveBaseUrl();
-        
-        // Use custom pageUrl if provided, otherwise try to construct from ID
-        const pageUrl = customPageUrl || `${getBaseUrl()}/series/${id}.html`;
-        const rawStreams = await scrapeSeriesPage(pageUrl, parseInt(season), parseInt(episode));
+
+        const pageUrl = customPageUrl || await findFsPageUrl(id, 'series');
+        if (!pageUrl) return res.status(404).json({ error: `Page FS introuvable pour l'ID ${id}` });
+        // Signature scraper : scrapeSeriesPage(pageUrl, episode) — l'épisode est le 2e argument.
+        const rawStreams = await scrapeSeriesPage(pageUrl, parseInt(episode));
         const streams = await formatStreams(rawStreams, pageUrl, parseInt(season), parseInt(episode));
-        
-        const meta = await scrapeMetadata(pageUrl);
-        
-        res.json({ 
-            id, 
-            season: parseInt(season), 
+
+        const meta = await scrapeMetadata(pageUrl).catch(() => ({}));
+
+        res.json({
+            id,
+            season: parseInt(season),
             episode: parseInt(episode),
-            pageUrl, 
+            pageUrl,
             meta,
-            count: streams.length, 
-            streams 
+            count: streams.length,
+            streams
         });
     } catch (err) {
         console.error('[API] Series streams error:', err.message);
