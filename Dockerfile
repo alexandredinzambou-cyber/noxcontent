@@ -9,6 +9,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 COPY api-server.js ./
+COPY addon-handlers.js ./
 COPY lib/ ./lib/
 COPY public/ ./public/
 

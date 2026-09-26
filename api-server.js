@@ -5,6 +5,7 @@ const cors = require('cors');
 const { searchFS, scrapeFilmPage, scrapeSeriesPage, scrapeCatalog, findBestMatch, scrapeMetadata, scrapeTmdbId } = require('./lib/scraper');
 const { resolve } = require('./lib/resolvers');
 const { resolveBaseUrl, getBaseUrl, HEADERS } = require('./lib/utils');
+const { buildAddonInterface } = require('./addon-handlers');
 
 /* Retrouve l'URL réelle d'une page FS depuis son ID numérique (comme l'addon :
    /films/ID-*.html ou /s-tv/ID-*.html, en suivant la redirection du site).
@@ -396,6 +397,52 @@ app.get('/cache/stats', (req, res) => {
     res.json(cache.stats());
 });
 
+/* ── Routeur Stremio monté à la racine ────────────────────────────────────
+   Le protocole addon complet (manifest, catalog, meta, stream) cohabite ici
+   avec l'API REST : le front NOX consomme /manifest.json, /catalog/...json
+   et /stream/...json directement sur cette même URL de déploiement. */
+buildAddonInterface().then(addon => {
+    const sendJson = (res, obj) => { res.set('Content-Type', 'application/json'); res.send(JSON.stringify(obj)); };
+    /* Extra Stremio : "skip=0&search=abc" → objet. */
+    const parseExtra = s => {
+        const out = {};
+        String(s || '').split('&').filter(Boolean).forEach(kv => {
+            const i = kv.indexOf('=');
+            if (i > 0) out[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1));
+        });
+        return out;
+    };
+    const stripJson = s => String(s || '').replace(/\.json$/, '');
+
+    app.get('/manifest.json', (req, res) => sendJson(res, addon.manifest));
+
+    app.get('/catalog/:type/:id/:extra', async (req, res) => {
+        try {
+            const extra = parseExtra(stripJson(req.params.extra));
+            const r = await addon.get('catalog', req.params.type, req.params.id, extra);
+            sendJson(res, r && r.metas !== undefined ? r : { metas: [] });
+        } catch (e) { sendJson(res, { metas: [] }); }
+    });
+
+    app.get('/meta/:type/:id', async (req, res) => {
+        try {
+            const r = await addon.get('meta', req.params.type, stripJson(req.params.id), {});
+            sendJson(res, r && r.meta !== undefined ? r : { meta: null });
+        } catch (e) { sendJson(res, { meta: null }); }
+    });
+
+    app.get('/stream/:type/:id', async (req, res) => {
+        try {
+            const r = await addon.get('stream', req.params.type, stripJson(req.params.id), {});
+            sendJson(res, r && r.streams !== undefined ? r : { streams: [] });
+        } catch (e) { sendJson(res, { streams: [] }); }
+    });
+
+    console.log('[Addon] Routeur Stremio monté (/manifest.json, /catalog, /meta, /stream)');
+}).catch(err => {
+    console.error('[Addon] Impossible de monter le routeur Stremio :', err.message);
+});
+
 // Start server — bind TOUJOURS immédiatement (Railway coupe un conteneur qui
 // ne répond pas au healthcheck). La résolution du domaine FS (landing →
 // passerelle → miroir, potentiellement lente ou bloquée depuis un datacenter)
@@ -408,7 +455,12 @@ app.listen(PORT, () => {
     console.log(`FrenchStream API running at http://localhost:${PORT}`);
     console.log(`TMDB API Key: ${TMDB_API_KEY ? 'configured' : 'NOT SET (title param required)'}`);
     console.log('');
-    console.log('Available endpoints:');
+    console.log('Protocole Stremio (pour le front NOX) :');
+    console.log('  GET  /manifest.json');
+    console.log('  GET  /catalog/movie/frenchstream-films/skip=0.json  (+ /search=…)');
+    console.log('  GET  /stream/{movie|series}/{id}.json               (tt… ou fs:…)');
+    console.log('');
+    console.log('API REST :');
     console.log('  GET  /health                 - Health check');
     console.log('  POST /init                   - Initialize (resolve base URL)');
     console.log('  GET  /search?q=<query>&type=<movie|series>  - Search');
